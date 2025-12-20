@@ -24,92 +24,104 @@ This tutorial covers a sophisticated multi-signature escrow smart contract (`Pub
 ### System Architecture
 
 ```mermaid
-flowchart TD
-    subgraph "Off-Chain Components"
-        W1[Depositor<br/>Wallet 1]
-        W2[Beneficiary<br/>Wallet 2]
-        W3[Official 1<br/>Wallet 3]
-        W4[Official 2<br/>Wallet 4]
-        
-        subgraph "Endpoints"
-            EP1[lock]
-            EP2[approve]
-            EP3[release]
-            EP4[refund]
-        end
-        
-        subgraph "Emulator Trace"
-            ET[Test Execution Flow]
-        end
+graph TB
+    subgraph "User Wallets"
+        W1[Depositor Wallet]
+        W2[Beneficiary Wallet]
+        W3[Official 1 Wallet]
+        W4[Official 2 Wallet]
     end
     
-    subgraph "On-Chain Components"
-        SC[Smart Contract<br/>PublicFund.hs]
-        V[Validator Logic]
-        D[EscrowDatum]
-        A[EscrowAction]
+    subgraph "Smart Contract Components"
+        SC[PublicFund.hs<br/>Validator Script]
+        D[EscrowDatum<br/>State Storage]
+        A[EscrowAction<br/>Redeemer Types]
+        V[Validation Logic]
     end
     
     subgraph "Blockchain Layer"
         BC[Cardano Ledger]
-        UTXO[Script UTxO]
+        UTXO1[Script UTxO<br/>Locked Funds]
+        UTXO2[Updated UTxO<br/>+ Approvals]
+        UTXO3[Final UTxO<br/>Ready for Release]
     end
     
-    %% Connections
-    W1 --> EP1
-    EP1 --> SC
-    W3 --> EP2
-    W4 --> EP2
-    EP2 --> SC
-    W2 --> EP3
-    EP3 --> SC
-    W1 --> EP4
-    EP4 --> SC
+    subgraph "Transaction Flow"
+        TF1[Lock Transaction]
+        TF2[Approve Transactions]
+        TF3[Release/Refund Transaction]
+    end
     
-    SC --> V
-    V --> D
-    V --> A
-    SC --> UTXO
-    UTXO --> BC
+    %% Initial Locking
+    W1 -->|10 ADA| TF1
+    TF1 --> SC
+    SC --> UTXO1
     
-    ET -.-> EP1
-    ET -.-> EP2
-    ET -.-> EP3
-    ET -.-> EP4
+    %% Approval Process
+    W3 -->|Sign| TF2
+    W4 -->|Sign| TF2
+    TF2 --> SC
+    SC -->|Update State| UTXO2
+    
+    %% Final Action
+    W2 -->|Claim| TF3
+    W1 -->|Refund| TF3
+    TF3 --> SC
+    SC --> BC
+    
+    %% Data Flow
+    D --> V
+    A --> V
+    V --> SC
+    
+    %% State Transitions
+    UTXO1 -->|Approved| UTXO2
+    UTXO2 -->|Released/Refunded| BC
 ```
 
 ### Workflow Sequence
 
 ```mermaid
 sequenceDiagram
-    participant D as Depositor (Wallet 1)
-    participant O1 as Official 1 (Wallet 3)
-    participant O2 as Official 2 (Wallet 4)
-    participant B as Beneficiary (Wallet 2)
-    participant SC as Smart Contract
-    participant BC as Blockchain
+    participant Depositor
+    participant Beneficiary
+    participant Official1
+    participant Official2
+    participant Validator
+    participant Ledger
     
-    Note over D,B: Phase 1: Fund Locking
-    D->>SC: lock() with 10 ADA
-    SC->>BC: Create UTxO with datum
+    Note over Depositor,Validator: Phase 1: Initial Lock
+    Depositor->>Validator: lock(10 ADA, datum)
+    Validator->>Ledger: Create Script UTxO
+    Ledger-->>Validator: Confirmation
+    Validator-->>Depositor: Funds Locked
     
-    Note over D,B: Phase 2: Approvals (before deadline)
-    O1->>SC: approve()
-    SC->>BC: Update datum<br/>approvals: [O1]
+    Note over Depositor,Validator: Phase 2: Multi-Signature Approval
+    Official1->>Validator: approve()
+    Validator->>Ledger: Update UTxO (1 approval)
+    Ledger-->>Validator: State Updated
+    Validator-->>Official1: Approval Recorded
     
-    O2->>SC: approve()
-    SC->>BC: Update datum<br/>approvals: [O1, O2]
+    Official2->>Validator: approve()
+    Validator->>Ledger: Update UTxO (2 approvals)
+    Ledger-->>Validator: State Updated
+    Validator-->>Official2: Approval Recorded
     
-    Note over D,B: Phase 3: Release
-    B->>SC: release()
-    SC->>BC: Validate: 2 approvals ≥ required<br/>Validate: before deadline<br/>Validate: beneficiary signature
-    BC->>B: Transfer 10 ADA
-    
-    Note over D,B: Alternative: Refund Scenario
-    alt Insufficient approvals by deadline
-        D->>SC: refund()
-        SC->>BC: Validate: after deadline<br/>Validate: approvals < required<br/>Validate: depositor signature
-        BC->>D: Return 10 ADA
+    Note over Depositor,Validator: Phase 3: Fund Distribution
+    alt Sufficient Approvals (Before Deadline)
+        Beneficiary->>Validator: release()
+        Validator->>Ledger: Check: 2 approvals ≥ required
+        Validator->>Ledger: Check: Before deadline
+        Validator->>Ledger: Check: Beneficiary signature
+        Validator->>Ledger: Transfer 10 ADA
+        Ledger-->>Beneficiary: Funds Received
+    else Insufficient Approvals (After Deadline)
+        Depositor->>Validator: refund()
+        Validator->>Ledger: Check: After deadline
+        Validator->>Ledger: Check: Approvals < required
+        Validator->>Ledger: Check: Depositor signature
+        Validator->>Ledger: Return 10 ADA
+        Ledger-->>Depositor: Funds Refunded
     end
 ```
 
